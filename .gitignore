@@ -1,0 +1,8 @@
+*.swo
+*.swp
+*.swq
+
+access-control-status-bridge
+*.crt
+*.key
+*.pem
