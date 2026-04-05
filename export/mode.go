@@ -15,7 +15,7 @@ func ModeToPrometheus(ctx context.Context, export chan []messages.Mode) {
         select {
             case modes := <- export:
                 timeSeries := modesToTimeSeries("acs", modes)
-                err := prometheus.RemoteWrite(ctx, "http://localhost:8090/api/v1/push", "bhs", timeSeries)
+                err := prometheus.RemoteWrite(ctx, timeSeries)
 
                 if err == nil {
                     log.Printf("Exported %d mode time series", len(timeSeries))

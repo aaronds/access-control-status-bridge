@@ -2,7 +2,7 @@ package export
 
 import "context"
 import "log"
-import "fmt"
+//import "fmt"
 import "slices"
 import "strings"
 import "strconv"
@@ -17,7 +17,7 @@ func AcsErrorToPrometheus(ctx context.Context, export chan []messages.AcsError) 
         select {
             case acsErrors := <- export:
                 timeSeries := acsErrorsToTimeSeries("acs", acsErrors)
-                err := prometheus.RemoteWrite(ctx, "http://localhost:8090/api/v1/push", "bhs", timeSeries)
+                err := prometheus.RemoteWrite(ctx, timeSeries)
 
                 if err == nil {
                     log.Printf("Exported %d acsError time series", len(timeSeries))
@@ -39,8 +39,6 @@ func acsErrorsToTimeSeries(site string, acsErrors []messages.AcsError) []prompb.
         tagStr := strconv.Itoa(int(acsError.Tag))
         errorStr := strconv.Itoa(int(acsError.Error))
         deviceKey := strings.Join([]string{acsError.Id, tagStr, errorStr},"_")
-
-        fmt.Println("deviceKey: " + deviceKey)
 
         if slices.Index(deviceKeys, deviceKey) < 0 {
             deviceKeys = append(deviceKeys, deviceKey)

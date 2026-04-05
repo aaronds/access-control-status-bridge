@@ -6,3 +6,6 @@ access-control-status-bridge
 *.crt
 *.key
 *.pem
+*.csr
+
+aaron-*

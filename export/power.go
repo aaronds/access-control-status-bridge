@@ -15,7 +15,7 @@ func PowerToPrometheus(ctx context.Context, export chan []messages.Power) {
         select {
             case powers := <- export:
                 timeSeries := powersToTimeSeries("acs", powers)
-                err := prometheus.RemoteWrite(ctx, "http://localhost:8090/api/v1/push", "bhs", timeSeries)
+                err := prometheus.RemoteWrite(ctx, timeSeries)
 
                 if err == nil {
                     log.Printf("Exported %d power time series", len(timeSeries))

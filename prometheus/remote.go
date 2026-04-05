@@ -5,11 +5,14 @@ import "bytes"
 import "context"
 import "fmt"
 import "net/http"
+import "os"
 
 import "github.com/golang/snappy"
 import "github.com/prometheus/prometheus/prompb"
 
-func RemoteWrite(ctx context.Context, url string, orgId string, timeseries []prompb.TimeSeries) error {
+var TlsClient *http.Client = nil
+
+func RemoteWrite(ctx context.Context, timeseries []prompb.TimeSeries) error {
     writeRequest := &prompb.WriteRequest{ Timeseries : timeseries } 
     data, err := writeRequest.Marshal()
 
@@ -18,6 +21,18 @@ func RemoteWrite(ctx context.Context, url string, orgId string, timeseries []pro
 	}
 
     compressed := snappy.Encode(nil, data)
+
+    url := os.Getenv("BRIDGE_EXPORT_URL")
+
+    if url == "" {
+        url = "http://localhost:8080/api/v1/push"
+    }
+
+    orgId := os.Getenv("BRIDGE_EXPORT_ORG_ID")
+
+    if orgId == "" {
+        orgId = "bhs"
+    }
 
     req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(compressed))
 
@@ -29,7 +44,7 @@ func RemoteWrite(ctx context.Context, url string, orgId string, timeseries []pro
         req.Header.Set("X-Scope-OrgID", orgId)
     }
 
-    resp, err := http.DefaultClient.Do(req)
+    resp, err := chooseClient().Do(req)
     if err != nil {
         return err
     }
@@ -41,4 +56,12 @@ func RemoteWrite(ctx context.Context, url string, orgId string, timeseries []pro
     }
 
     return nil
+}
+
+func chooseClient() *http.Client {
+    if TlsClient == nil {
+        return http.DefaultClient
+    } else {
+        return TlsClient
+    }
 }

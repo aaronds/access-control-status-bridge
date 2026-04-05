@@ -2,12 +2,14 @@ package main
     
 import "access-control-status-bridge/messages"
 import "access-control-status-bridge/export"
+import "access-control-status-bridge/prometheus"
 import "context"
 import "fmt"
 import mqtt "github.com/eclipse/paho.mqtt.golang"
 import "io/ioutil"
 import "crypto/x509"
 import "crypto/tls"
+import "net/http"
 import "log"
 import "time"
 import "strings"
@@ -24,33 +26,33 @@ const (
 func main() {
     fmt.Println("Access Control Status Bridge")
 
-    cert, err := tls.LoadX509KeyPair(
-        "2e4b0db865633c4dac45e7d2b573519d3bb8122fa70b102204b79132bb59904c-certificate.pem.crt",
-        "2e4b0db865633c4dac45e7d2b573519d3bb8122fa70b102204b79132bb59904c-private.pem.key",
-    )
+    exportTlsConfig := getTlsContextFromEnv("EXPORT")
+    subscribeTlsConfig := getTlsContextFromEnv("SUBSCRIBE")
+    //publishTlsConfig := getTlsContextFromEnv("PUBLISH")
 
-    if err != nil {
-        log.Fatal(err)
+    subscribeBroker := os.Getenv("BRIDGE_SUBSCRIBE_BROKER")
+    subscribeClientID := os.Getenv("BRIDGE_SUBSCRIBE_CLIENT_ID")
+
+    if subscribeClientID == "" {
+        subscribeClientID = "access-control-status-bridge-subscribe"
     }
 
-    caCertPool := x509.NewCertPool()
-    pemData, err := ioutil.ReadFile("AmazonRootCA1.pem")
 
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    caCertPool.AppendCertsFromPEM(pemData)
-
-    tlsConfig := &tls.Config{
-        RootCAs: caCertPool,
-        Certificates: []tls.Certificate{cert},
+    if exportTlsConfig != nil {
+        prometheus.TlsClient = &http.Client{
+            Transport : &http.Transport{
+                TLSClientConfig : exportTlsConfig,
+            },
+        }
     }
 
     opts := mqtt.NewClientOptions()
-    opts.AddBroker(broker)
-    opts.SetClientID(clientID)
-    opts.SetTLSConfig(tlsConfig)
+    opts.AddBroker(subscribeBroker)
+    opts.SetClientID(subscribeClientID)
+
+    if subscribeTlsConfig != nil {
+        opts.SetTLSConfig(subscribeTlsConfig)
+    }
 
     c := mqtt.NewClient(opts)
 
@@ -117,4 +119,43 @@ func subscribeToVersionMessage(client mqtt.Client, topic string, messageHandler 
 
         messageHandler.In() <- rawMessage
     })
+}
+
+func getTlsContextFromEnv(key string) *tls.Config {
+
+    var envTlsConfig *tls.Config = nil
+
+    envTlsCert := os.Getenv("BRIDGE_" + key + "_TLS_CERT")
+    envTlsKey := os.Getenv("BRIDGE_" + key + "_TLS_KEY")
+    envTlsCA := os.Getenv("BRIDGE_" + key + "_TLS_CA")
+
+    if envTlsCert != "" {
+
+        cert, err := tls.LoadX509KeyPair(
+            envTlsCert,
+            envTlsKey,
+        )
+
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        caCertPool := x509.NewCertPool()
+        pemData, err := ioutil.ReadFile(envTlsCA)
+
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        caCertPool.AppendCertsFromPEM(pemData)
+
+        envTlsConfig = &tls.Config{
+            RootCAs: caCertPool,
+            Certificates: []tls.Certificate{cert},
+        }
+
+        return envTlsConfig
+    } else {
+        return nil
+    }
 }

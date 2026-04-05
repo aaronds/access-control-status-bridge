@@ -15,7 +15,7 @@ func EnvPmToPrometheus(ctx context.Context, export chan []messages.EnvPm) {
         select {
             case envPms := <- export:
                 timeSeries := envPmsToTimeSeries("acs", envPms)
-                err := prometheus.RemoteWrite(ctx, "http://localhost:8090/api/v1/push", "bhs", timeSeries)
+                err := prometheus.RemoteWrite(ctx, timeSeries)
 
                 if err == nil {
                     log.Printf("Exported %d envPm time series", len(timeSeries))
