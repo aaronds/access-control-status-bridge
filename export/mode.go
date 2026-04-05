@@ -30,7 +30,7 @@ func ModeToPrometheus(ctx context.Context, export chan []messages.Mode) {
 }
 
 func modesToTimeSeries(site string, modes []messages.Mode) []prompb.TimeSeries {
-    deviceIds := make([]string,1)
+    deviceIds := make([]string,0)
     deviceToModes := make(map[string][]messages.Mode)
 
     for _, mode := range modes {

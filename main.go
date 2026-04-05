@@ -86,6 +86,15 @@ func main() {
     go powerHandler.Poll()
     go export.PowerToPrometheus(ctx, powerHandler.Export)
 
+    envPmHandler := messages.CreateEnvPmHandler(ctx)
+    subscribeToVersionMessage(c, "env/message/pm/#", envPmHandler);
+    go envPmHandler.Poll()
+    go export.EnvPmToPrometheus(ctx, envPmHandler.Export)
+
+    acsErrorHandler := messages.CreateAcsErrorHandler(ctx)
+    subscribeToVersionMessage(c, "acs/message/error/#", acsErrorHandler);
+    go acsErrorHandler.Poll()
+    go export.AcsErrorToPrometheus(ctx, acsErrorHandler.Export)
 
     sigChan := make(chan os.Signal, 1)
     signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

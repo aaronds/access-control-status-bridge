@@ -30,7 +30,7 @@ func PowerToPrometheus(ctx context.Context, export chan []messages.Power) {
 }
 
 func powersToTimeSeries(site string, powers []messages.Power) []prompb.TimeSeries {
-    deviceIds := make([]string,1)
+    deviceIds := make([]string,0)
     deviceToPowers := make(map[string][]messages.Power)
 
     for _, power := range powers {
@@ -63,15 +63,15 @@ func powersToTimeSeries(site string, powers []messages.Power) []prompb.TimeSerie
 
             metricIsOn.Samples[i] = prompb.Sample{ Value : isOn, Timestamp : int64(model.TimeFromUnix(power.Ts.Unix())) }
 
-            metricPower.Samples[i] = sampleFromUint32(power, power.Power)
-            metricEnergy.Samples[i] = sampleFromUint32(power, power.Energy)
+            metricPower.Samples[i] = sampleFromUint32(power.Ts, power.Power)
+            metricEnergy.Samples[i] = sampleFromUint32(power.Ts, power.Energy)
             metricFrequency.Samples[i] = prompb.Sample{
                 Value : ((float64(power.Zx) / float64(power.Time)) / 1000000) / 2,
                 Timestamp : int64(model.TimeFromUnix(power.Ts.Unix())),
             }
-            metricSampleTime.Samples[i] = sampleFromUint32(power, power.Time)
-            metricZx.Samples[i] = sampleFromUint32(power, power.Zx)
-            metricCurrentMax.Samples[i] = sampleFromUint32(power, power.CurrentMax)
+            metricSampleTime.Samples[i] = sampleFromUint32(power.Ts, power.Time)
+            metricZx.Samples[i] = sampleFromUint32(power.Ts, power.Zx)
+            metricCurrentMax.Samples[i] = sampleFromUint32(power.Ts, power.CurrentMax)
 
         }
 
@@ -86,20 +86,3 @@ func powersToTimeSeries(site string, powers []messages.Power) []prompb.TimeSerie
 
     return timeSeries
 }
-
-func sampleFromUint32(power messages.Power, val uint32) prompb.Sample {
-    return prompb.Sample{ Value : float64(val), Timestamp : int64(model.TimeFromUnix(power.Ts.Unix())) }
-}
-
-func deviceTimeSeries(site string, deviceId string, metric string, sampleCount int) prompb.TimeSeries {
-    return prompb.TimeSeries{
-        Labels : []prompb.Label{
-            {Name : "__name__", Value : metric},
-            {Name : "project", Value : "acs"},
-            {Name : "site", Value : site},
-            {Name : "deviceId", Value : deviceId},
-        },
-        Samples : make([]prompb.Sample,sampleCount),
-    }
-}
-
