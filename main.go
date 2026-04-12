@@ -16,27 +16,26 @@ import "strings"
 import "os"
 import "os/signal"
 import "syscall"
-import "encoding/json"
-
-const (
-    broker   = "ssl://a1j7mrp8z8zjsh-ats.iot.eu-west-2.amazonaws.com:8883"
-    clientID = "status-application-test"
-)
 
 func main() {
     fmt.Println("Access Control Status Bridge")
 
     exportTlsConfig := getTlsContextFromEnv("EXPORT")
     subscribeTlsConfig := getTlsContextFromEnv("SUBSCRIBE")
-    //publishTlsConfig := getTlsContextFromEnv("PUBLISH")
+    publishTlsConfig := getTlsContextFromEnv("PUBLISH")
 
-    subscribeBroker := os.Getenv("BRIDGE_SUBSCRIBE_BROKER")
-    subscribeClientID := os.Getenv("BRIDGE_SUBSCRIBE_CLIENT_ID")
+    
+    publishTopicMode := os.Getenv("BRIDGE_PUBLISH_TOPIC_MODE_PREFIX");
 
-    if subscribeClientID == "" {
-        subscribeClientID = "access-control-status-bridge-subscribe"
+    if publishTopicMode == "" {
+        publishTopicMode = "tool"
     }
 
+    publishTopicEnvPm := os.Getenv("BRIDGE_PUBLISH_TOPIC_MODE_PREFIX");
+
+    if publishTopicEnvPm == "" {
+        publishTopicEnvPm = "env"
+    }
 
     if exportTlsConfig != nil {
         prometheus.TlsClient = &http.Client{
@@ -46,57 +45,69 @@ func main() {
         }
     }
 
-    opts := mqtt.NewClientOptions()
-    opts.AddBroker(subscribeBroker)
-    opts.SetClientID(subscribeClientID)
+    ctx, cancel := context.WithCancel(context.Background())
 
-    if subscribeTlsConfig != nil {
-        opts.SetTLSConfig(subscribeTlsConfig)
+    publishOpts := mqtt.NewClientOptions()
+    setMqttOpts(publishOpts, publishTlsConfig, "PUBLISH")
+
+    var publishClient mqtt.Client = nil;
+    var publishConnectToken mqtt.Token = nil;
+
+    if len(publishOpts.Servers) > 0 {
+        publishOpts.SetCleanSession(true)
+        publishOpts.SetConnectionLostHandler(func (c mqtt.Client, err error) {
+            log.Println(err)
+        })
+        publishClient = mqtt.NewClient(publishOpts)
+        publishConnectToken = publishClient.Connect()
     }
 
-    c := mqtt.NewClient(opts)
+    modeHandler := messages.CreateModeHandler(ctx)
+    go modeHandler.Poll()
+    go export.ModeToPrometheus(ctx, modeHandler.Export)
+    if publishClient != nil {
+        go modeHandler.Push(publishClient, publishTopicMode)
+    }
+
+    powerHandler := messages.CreatePowerHandler(ctx)
+    go powerHandler.Poll()
+    go export.PowerToPrometheus(ctx, powerHandler.Export)
+
+    envPmHandler := messages.CreateEnvPmHandler(ctx)
+    go envPmHandler.Poll()
+    go export.EnvPmToPrometheus(ctx, envPmHandler.Export)
+
+    if publishClient != nil {
+        go envPmHandler.Push(publishClient, publishTopicEnvPm)
+    }
+
+    acsErrorHandler := messages.CreateAcsErrorHandler(ctx)
+    go acsErrorHandler.Poll()
+    go export.AcsErrorToPrometheus(ctx, acsErrorHandler.Export)
+
+    subscribeOpts := mqtt.NewClientOptions()
+    setMqttOpts(subscribeOpts, subscribeTlsConfig, "SUBSCRIBE")
+
+    subscribeOpts.SetOnConnectHandler(func (c mqtt.Client) {
+        subscribeToVersionMessage(c, "acs/message/error/#", acsErrorHandler);
+        subscribeToVersionMessage(c, "env/message/pm/#", envPmHandler);
+        subscribeToVersionMessage(c, "acs/message/power/#", powerHandler)
+        subscribeToVersionMessage(c, "acs/message/mode/#", modeHandler)
+    })
+
+    subscribeOpts.SetConnectionLostHandler(func (c mqtt.Client, err error) {
+        log.Println(err)
+    })
+
+    c := mqtt.NewClient(subscribeOpts)
 
     if token := c.Connect(); token.Wait() && token.Error() != nil {
         panic(token.Error())
     }
 
-    ctx, cancel := context.WithCancel(context.Background())
-
-    modeHandler := messages.CreateModeHandler(ctx)
-
-    subscribeToVersionMessage(c, "acs/message/mode/#", modeHandler)
-    go modeHandler.Poll()
-    go export.ModeToPrometheus(ctx, modeHandler.Export)
-
-    go func () {
-        for {
-            select {
-                case mode := <- modeHandler.Outbox:
-                    buff, err := json.Marshal(mode)
-                    if err == nil && false {
-                        fmt.Println(string(buff))
-                    }
-
-                case <- ctx.Done():
-                    return
-            }
-        }
-    }()
-
-    powerHandler := messages.CreatePowerHandler(ctx)
-    subscribeToVersionMessage(c, "acs/message/power/#", powerHandler)
-    go powerHandler.Poll()
-    go export.PowerToPrometheus(ctx, powerHandler.Export)
-
-    envPmHandler := messages.CreateEnvPmHandler(ctx)
-    subscribeToVersionMessage(c, "env/message/pm/#", envPmHandler);
-    go envPmHandler.Poll()
-    go export.EnvPmToPrometheus(ctx, envPmHandler.Export)
-
-    acsErrorHandler := messages.CreateAcsErrorHandler(ctx)
-    subscribeToVersionMessage(c, "acs/message/error/#", acsErrorHandler);
-    go acsErrorHandler.Poll()
-    go export.AcsErrorToPrometheus(ctx, acsErrorHandler.Export)
+    if publishConnectToken != nil && publishConnectToken.Wait() && publishConnectToken.Error() != nil {
+        log.Println(publishConnectToken.Error())
+    }
 
     sigChan := make(chan os.Signal, 1)
     signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -104,6 +115,10 @@ func main() {
 
     cancel()
     c.Disconnect(250)
+
+    if publishClient != nil && publishClient.IsConnected() {
+        publishClient.Disconnect(250)
+    }
 }
 
 func subscribeToVersionMessage(client mqtt.Client, topic string, messageHandler messages.AccessMessageHandler) mqtt.Token {
@@ -158,4 +173,36 @@ func getTlsContextFromEnv(key string) *tls.Config {
     } else {
         return nil
     }
+}
+
+func setMqttOpts(opts *mqtt.ClientOptions, tlsConfig *tls.Config, key string) *mqtt.ClientOptions {
+    
+    broker := os.Getenv("BRIDGE_" + key + "_BROKER")
+    clientID := os.Getenv("BRIDGE_" + key + "_CLIENT_ID")
+    username := os.Getenv("BRIDGE_" + key + "_USERNAME")
+    password := os.Getenv("BRIDGE_" + key + "_PASSWORD")
+
+    if clientID == "" {
+        clientID = "access-control-status-bridge-" + key
+    }
+
+    opts.SetClientID(clientID)
+
+    if broker != "" {
+        opts.AddBroker(broker)
+    }
+
+    if username != "" {
+        opts.SetUsername(username)
+    }
+
+    if password != "" {
+        opts.SetPassword(password)
+    }
+
+    if tlsConfig != nil {
+        opts.SetTLSConfig(tlsConfig)
+    }
+
+    return opts
 }

@@ -1,11 +1,13 @@
 package messages
 
+import mqtt "github.com/eclipse/paho.mqtt.golang"
 import "context"
 import "time"
 import "encoding/hex"
-//import "fmt"
 import "encoding/binary"
+import "encoding/json"
 import "errors"
+import "log"
 
 type ModeHandler struct {
     Inbox chan RawMessage
@@ -40,6 +42,7 @@ func modeToString(mode byte) string {
 
 type Mode struct {
    Id string `json:"id"`
+   Version string `json:"version"`
    Mode string `json:"mode"`
    IsOn bool `json:"isOn"`
    IsUsed bool `json:"isUsed"`
@@ -87,6 +90,38 @@ func (modeH ModeHandler) Poll () {
     }
 }
 
+func (modeH ModeHandler) Push (publishClient mqtt.Client, publishTopicMode string) {
+    for {
+        select {
+            case mode := <- modeH.Outbox:
+                buff, err := json.Marshal(mode)
+                if publishClient != nil && publishClient.IsConnectionOpen() {
+                    modeFullTopic := publishTopicMode + "/" + mode.Id + "/all"
+                    publishClient.Publish(modeFullTopic, 0, false, buff)
+
+                    modeTopic := publishTopicMode + "/" + mode.Id + "/mode"
+                    publishClient.Publish(modeTopic, 0, false, mode.Mode)
+
+                    onTopic := publishTopicMode + "/" + mode.Id + "/on"
+
+                    if mode.Mode == "CONTROLLER_MODE_UNLOCKED" || mode.Mode == "CONTROLLER_MODE_IN_USE" {
+                        publishClient.Publish(onTopic, 0, false, "1")
+                    } else {
+                        publishClient.Publish(onTopic, 0, false, "0")
+                    }
+                }
+                
+                if err != nil {
+                    log.Println(err)
+                }
+
+            case <- modeH.context.Done():
+                return
+        }
+    }
+}
+
+
 func exportModeMessages(modeH ModeHandler, toExport []Mode) {
     select {
         case modeH.Export <- toExport:
@@ -121,7 +156,7 @@ func CreateModeHandler(ctx context.Context) *ModeHandler {
 func DecodeModeV1M0P1(raw RawMessage) (Mode, error) {
 
 
-    mode := Mode{ Ts : raw.Received }
+    mode := Mode{ Ts : raw.Received, Version : "1.0.1" }
 
     if len(raw.Payload) < 22 {
         return mode, errors.New("Payload incorrect size: " + string(len(raw.Payload)))

@@ -1,11 +1,15 @@
 package messages
 
+import mqtt "github.com/eclipse/paho.mqtt.golang"
+
 import "context"
 import "time"
 import "log"
 import "encoding/hex"
 import "encoding/binary"
+import "encoding/json"
 import "errors"
+import "strconv"
 
 type EnvPmHandler struct {
     Inbox chan RawMessage
@@ -42,6 +46,7 @@ func (envPmH EnvPmHandler) Poll () {
                 }
 
                 toExport = append(toExport, envPm)
+                outputEnvPmMessage(envPmH, envPm)
 
             case <- exportTicker.C:
                 exportEnvPmMessages(envPmH, toExport);
@@ -53,17 +58,50 @@ func (envPmH EnvPmHandler) Poll () {
     }
 }
 
+func (envPmH EnvPmHandler) Push (publishClient mqtt.Client, publishTopicEnvPm string) {
+    for {
+        select {
+            case envPm := <- envPmH.Outbox:
+                buff, jsonErr := json.Marshal(envPm)
+
+                if publishClient != nil && publishClient.IsConnectionOpen() {
+
+                    if jsonErr == nil {
+                        publishClient.Publish(publishTopicEnvPm + "/by-id/" + envPm.Id, 0, false, buff)
+                        publishClient.Publish(publishTopicEnvPm + "/by-location/" + envPm.LocationName + "/all", 0, false, buff)
+                    } else {
+                        log.Println(jsonErr)
+                    }
+
+                    publishClient.Publish(publishTopicEnvPm + "/by-location/" + envPm.LocationName + "/temperature", 0, false, strconv.FormatFloat(envPm.Temperature,'f', 2, 64))
+
+                    if !envPm.Obstructed {
+                        publishClient.Publish(publishTopicEnvPm + "/by-location/" + envPm.LocationName + "/pm/2", 0, false, strconv.FormatInt(int64(envPm.Pm2), 10))
+                        publishClient.Publish(publishTopicEnvPm + "/by-location/" + envPm.LocationName + "/pm/10", 0, false, strconv.FormatInt(int64(envPm.Pm10), 10))
+                    }
+                } else {
+                    //log.Println("No publish connection")
+                }
+
+            case <- envPmH.context.Done():
+                return
+        }
+    }
+} 
+
 type EnvPm struct {
-    Id string
-    Pm1 uint16
-    Pm2 uint16
-    Pm10 uint16
-    Temperature float64
-    RelativeHumidity float64
-    Pressure float64
-    Obstructed bool
-    Location uint16
-    Ts time.Time
+    Id string `json:"id"`
+    Version string `json:"version"`
+    Pm1 uint16 `json:"pm1"`
+    Pm2 uint16 `json:"pm2_5"`
+    Pm10 uint16 `json:"pm10"`
+    Temperature float64 `json:"temperature"`
+    RelativeHumidity float64 `json:"relativeHumidity"`
+    Pressure float64 `json:"pressure"`
+    Obstructed bool `json:"obstructed"`
+    Location uint16 `json:"location"`
+    LocationName string `json:"locationName"`
+    Ts time.Time `json:"ts"`
 }
 
 func exportEnvPmMessages(envPmH EnvPmHandler, toExport []EnvPm) {
@@ -89,9 +127,9 @@ func CreateEnvPmHandler(ctx context.Context) *EnvPmHandler {
 
 func DecodeEnvPmV1M0P1(raw RawMessage) (EnvPm, error) {
 
-    envPm := EnvPm{ Ts : raw.Received }
+    envPm := EnvPm{ Ts : raw.Received, Version : "1.0.1" , LocationName : "unknown/unknown"}
 
-    if len(raw.Payload) < 20 {
+    if len(raw.Payload) < 22 {
         return envPm, errors.New("Payload incorrect size: " + string(len(raw.Payload)))
     }
 
@@ -104,6 +142,27 @@ func DecodeEnvPmV1M0P1(raw RawMessage) (EnvPm, error) {
     envPm.Pressure = (float64(binary.LittleEndian.Uint16(raw.Payload[16:18]))) / 100
     flags := binary.LittleEndian.Uint16(raw.Payload[18:20])
     envPm.Obstructed = (flags & 1) > 0
+    
+    envPm.Location = binary.LittleEndian.Uint16(raw.Payload[20:22])
+
+    switch envPm.Location {
+        case 110:
+            envPm.LocationName = "woodshop/main"
+        default:
+            envPm.LocationName = "unknown/unknown"
+    }
 
     return envPm, nil
 }
+
+
+func outputEnvPmMessage(envPmH EnvPmHandler, envPm EnvPm) {
+    select {
+        case envPmH.Outbox <- envPm:
+            return;
+        default:
+            <- envPmH.Outbox
+            envPmH.Outbox <- envPm
+    }
+}
+
